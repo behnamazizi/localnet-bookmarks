@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>localnet-bookmarks</title>
+
+        <style>
+            body {
+                font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+                margin: 24px;
+            }
+            header {
+                display: flex;
+                gap: 12px;
+                flex-wrap: wrap;
+                align-items: center;
+                margin-bottom: 16px;
+            }
+            input,
+            select {
+                padding: 10px 12px;
+                border: 1px solid #ccc;
+                border-radius: 10px;
+            }
+            .meta {
+                opacity: 0.7;
+                font-size: 12px;
+                margin-bottom: 12px;
+            }
+            .grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+                gap: 12px;
+            }
+
+            .card {
+                border: 1px solid #e6e6e6;
+                border-radius: 14px;
+                padding: 12px;
+            }
+            .row {
+                display: flex;
+                gap: 10px;
+                align-items: flex-start;
+            }
+            .name {
+                font-weight: 700;
+            }
+            .cat {
+                font-size: 12px;
+                opacity: 0.75;
+                margin-top: 2px;
+            }
+            .muted {
+                opacity: 0.7;
+                font-size: 12px;
+                margin-top: 6px;
+            }
+
+            .favicon {
+                width: 24px;
+                height: 24px;
+                border-radius: 7px;
+                border: 1px solid #e6e6e6;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 auto;
+                overflow: hidden;
+                user-select: none;
+            }
+
+            /* When an icon exists, we use the sprite. */
+            .favicon.has-ico {
+                background-image: url("__SPRITE_DATA_URI__");
+                background-repeat: no-repeat;
+                background-size: __SPRITE_BG_SIZE__;
+                color: transparent;
+            }
+
+            /* When no icon exists, show the first letter. */
+            .favicon.no-ico {
+                background: #f7f7f7;
+                font-size: 12px;
+                font-weight: 700;
+                color: #333;
+            }
+
+            .tags {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                margin-top: 10px;
+            }
+            .tag {
+                font-size: 12px;
+                padding: 4px 8px;
+                border: 1px solid #ddd;
+                border-radius: 999px;
+                opacity: 0.9;
+            }
+
+            a {
+                text-decoration: none;
+            }
+            .topline {
+                display: flex;
+                justify-content: space-between;
+                gap: 10px;
+                align-items: flex-start;
+            }
+        </style>
+
+        <!-- Auto-generated icon mapping rules (sprite background-position) -->
+        <style>
+            __ICON_CSS_RULES__
+        </style>
+    </head>
+
+    <body>
+        <h1>localnet-bookmarks</h1>
+        <div class="meta">خروجی آفلاین (یک فایل HTML). داده و آیکون‌ها داخل همین فایل embed می‌شوند.</div>
+
+        <header>
+            <input id="q" type="search" placeholder="جست‌وجو در نام/آدرس/دسته/تگ‌ها…" />
+            <select id="cat">
+                <option value="">همهٔ دسته‌بندی‌ها</option>
+                __CATEGORIES__
+            </select>
+        </header>
+
+        <div id="stats" class="meta"></div>
+        <div id="grid" class="grid"></div>
+
+        <script>
+            // Embedded data (generated)
+            const SITES = __DATA__;
+
+            // Hostnames that have a provided icon file (generated)
+            const ICON_HOSTS = new Set(__ICON_HOSTS__);
+
+            const grid = document.getElementById("grid");
+            const q = document.getElementById("q");
+            const cat = document.getElementById("cat");
+            const stats = document.getElementById("stats");
+
+            function norm(s) {
+                return (s || "").toString().trim().toLowerCase();
+            }
+
+            function getHostname(url) {
+                try {
+                    return new URL(url).hostname;
+                } catch {
+                    return "";
+                }
+            }
+
+            function firstLetter(name) {
+                const s = (name || "").trim();
+                if (!s) return "?";
+                // Use the first visible char; Persian/Arabic letters are fine.
+                return s[0];
+            }
+
+            function render(items) {
+                stats.textContent = `نمایش: ${items.length} مورد از ${SITES.length}`;
+
+                grid.innerHTML = items
+                    .map((s) => {
+                        const hostname = getHostname(s.url);
+                        const hasIcon = ICON_HOSTS.has(hostname);
+                        const favClass = hasIcon ? "has-ico" : "no-ico";
+                        const letter = firstLetter(s.name);
+
+                        const tags = (s.tags || []).map((t) => `<span class="tag">${t}</span>`).join("");
+
+                        return `
+          <div class="card">
+            <div class="topline">
+              <div class="row">
+                <span class="favicon ${favClass}" data-ico="${hostname}">${hasIcon ? "" : letter}</span>
+                <div>
+                  <div class="name">${s.name}</div>
+                  <div class="cat">${s.category || ""}</div>
+                </div>
+              </div>
+              <div>
+                <a href="${s.url}" target="_blank" rel="noreferrer">باز کردن</a>
+              </div>
+            </div>
+            <div class="muted">${s.url}</div>
+            <div class="tags">${tags}</div>
+          </div>
+        `;
+                    })
+                    .join("");
+            }
+
+            function apply() {
+                const query = norm(q.value);
+                const c = cat.value;
+
+                const filtered = SITES.filter((s) => {
+                    if (c && (s.category || "") !== c) return false;
+                    if (!query) return true;
+
+                    const hay = [s.name, s.url, s.category, ...(s.tags || [])].map(norm).join(" | ");
+                    return hay.includes(query);
+                });
+
+                render(filtered);
+            }
+
+            q.addEventListener("input", apply);
+            cat.addEventListener("change", apply);
+
+            render(SITES);
+        </script>
+    </body>
+</html>

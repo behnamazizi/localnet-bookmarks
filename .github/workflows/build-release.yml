@@ -1,0 +1,76 @@
+name: Build & Release (offline bundle)
+
+on:
+    push:
+        branches: ["main"]
+        paths:
+            - "src/list.json"
+            - "src/icons/**"
+            - "scripts/build.py"
+            - "scripts/templates/index.template.html"
+            - ".github/workflows/build-release.yml"
+    workflow_dispatch: {}
+
+permissions:
+    contents: write
+
+jobs:
+    build_release:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+
+            - name: Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  python -m pip install Pillow
+
+            - name: Build
+              run: |
+                  python scripts/build.py
+
+            - name: Commit README changes (if any)
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+                  git add README.md
+                  git diff --cached --quiet || git commit -m "chore: autogen README [skip ci]"
+                  git push
+
+            - name: Prepare dist assets
+              run: |
+                  mkdir -p release
+                  cp dist/index.html release/localnet-bookmarks.html
+                  cp src/list.json release/list.json
+                  cd release
+                  zip -9 localnet-bookmarks-${{ github.run_number }}.zip localnet-bookmarks.html list.json
+
+            - name: Create Release tag
+              id: tagger
+              run: |
+                  TAG="r-$(date -u +'%Y-%m-%d')-${{ github.run_number }}"
+                  echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ steps.tagger.outputs.tag }}
+                  name: ${{ steps.tagger.outputs.tag }}
+                  body: |
+                      Offline bundle for localnet-bookmarks.
+
+                      Included:
+                      - localnet-bookmarks.html (self-contained)
+                      - list.json
+                      - localnet-bookmarks-${{ github.run_number }}.zip
+                  files: |
+                      release/localnet-bookmarks.html
+                      release/list.json
+                      release/localnet-bookmarks-${{ github.run_number }}.zip
