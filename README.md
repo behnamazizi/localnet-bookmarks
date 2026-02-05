@@ -34,3 +34,8 @@ If an icon is missing, the UI shows the first letter of the site name.
 python -m pip install Pillow
 python scripts/build.py
 ```
+
+## Directory (auto-generated)
+
+<!-- AUTOGEN:LIST:START -->
+<!-- AUTOGEN:LIST:END -->
