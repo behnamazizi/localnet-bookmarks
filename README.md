@@ -20,10 +20,7 @@
 
 ### آخرین نسخهٔ آماده برای دانلود
 
-**آخرین ریلیز پروژه (HTML + JSON + ZIP):**  
 [👉 Download](https://github.com/behnamazizi/localnet-bookmarks/releases/latest)
-
-> توصیه: اگر احتمال نیاز در زمان قطعی اینترنت را می‌دهید، آخرین فایل HTML یا ZIP را از قبل دانلود و نگه‌داری کنید.
 
 ---
 
