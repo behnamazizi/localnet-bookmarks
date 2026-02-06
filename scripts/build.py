@@ -146,7 +146,7 @@ def extract_dominant_color(img_rgb: Image.Image) -> str:
     b = sum(p[2] for p in filtered) / len(filtered)
 
     # Pastelize: blend with white (higher = softer)
-    blend = 0.75
+    blend = 0.25
     r = int(r + (255 - r) * blend)
     g = int(g + (255 - g) * blend)
     b = int(b + (255 - b) * blend)

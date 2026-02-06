@@ -218,8 +218,8 @@
                 outline: none;
                 color: var(--c-g-85);
                 background-color: var(--c-g-15);
-                background-image: linear-gradient(220deg, var(--c-g-15) 50%, var(--c-b) 100%);
-                background-position-x: -14rem;
+                /* background-image: linear-gradient(220deg, var(--c-g-15) 50%, var(--c-b) 100%); */
+                background-position-x: 14rem;
                 background-repeat: no-repeat;
             }
 
@@ -372,9 +372,10 @@
                         const letter = firstLetter(s.name);
 
                         const style = hasIcon ? `style="background-position:-${s.icon_x}px -${s.icon_y}px; background-color:${s.icon_color};"` : `style="background-color:${s.icon_color || "#f3f4f6"};"`;
+                        const style_bg = `style="background-image: linear-gradient(135deg, var(--c-g-15) 20%, ${hasIcon ? s.icon_color : "#f3f4f6"} 100%);"`;
 
                         return `
-                        <a class="card" href="${s.url}" target="_blank" rel="noreferrer">
+                        <a class="card" href="${s.url}" target="_blank" rel="noreferrer" ${style_bg}>
                             <span class="favicon ${favClass}" ${style}>${hasIcon ? "" : letter}</span>
                             <h2 class="name" title="${s.name}">${s.name}</h2>
                             <h3 class="url" title="${s.url}">${s.url}</h3>
