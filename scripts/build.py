@@ -209,7 +209,7 @@ def save_sprite_to_data_uri(sprite_rgb: Image.Image) -> tuple[str, str]:
             buf,
             format="WEBP",
             quality=SPRITE_WEBP_QUALITY,
-            method=6,  # higher compression effort
+            method=2,  # higher compression effort
         )
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
         return f"data:image/webp;base64,{b64}", "image/webp"
