@@ -57,13 +57,11 @@ jobs:
                   mkdir -p release
                   cp dist/index.html release/localnet-bookmarks.html
                   cp src/list.json release/list.json
-                  cd release
-                  zip -9 localnet-bookmarks-${{ github.run_number }}.zip localnet-bookmarks.html list.json
 
             - name: Create Release tag
               id: tagger
               run: |
-                  TAG="r-$(date -u +'%Y-%m-%d')-${{ github.run_number }}"
+                  TAG="$(date -u +%s)"
                   echo "tag=$TAG" >> $GITHUB_OUTPUT
 
             - name: Create GitHub Release
@@ -77,8 +75,6 @@ jobs:
                       Included:
                       - localnet-bookmarks.html (self-contained)
                       - list.json
-                      - localnet-bookmarks-${{ github.run_number }}.zip
                   files: |
                       release/localnet-bookmarks.html
                       release/list.json
-                      release/localnet-bookmarks-${{ github.run_number }}.zip

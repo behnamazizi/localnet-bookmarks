@@ -371,7 +371,7 @@
                         const favClass = hasIcon ? "has-ico" : "no-ico";
                         const letter = firstLetter(s.name);
 
-                        const style = hasIcon ? `style="background-position:-${s.icon_x}px -${s.icon_y}px;"` : "";
+                        const style = hasIcon ? `style="background-position:-${s.icon_x}px -${s.icon_y}px; background-color:${s.icon_color};"` : `style="background-color:${s.icon_color || "#f3f4f6"};"`;
 
                         return `
                         <a class="card" href="${s.url}" target="_blank" rel="noreferrer">
