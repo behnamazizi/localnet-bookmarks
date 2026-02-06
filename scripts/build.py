@@ -1,8 +1,10 @@
+import datetime
+import os
+import subprocess
 import base64
 import json
 import math
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -10,8 +12,8 @@ from urllib.parse import urlparse
 
 from PIL import Image
 
+# Project paths
 ROOT = Path(__file__).resolve().parents[1]
-
 SRC_LIST = ROOT / "src" / "list.json"
 ICONS_DIR = ROOT / "src" / "icons"
 
@@ -19,13 +21,11 @@ TEMPLATE = ROOT / "scripts" / "templates" / "index.template.html"
 DIST_DIR = ROOT / "dist"
 OUT_HTML = DIST_DIR / "index.html"
 
-README = ROOT / "README.md"
-README_START = "<!-- AUTOGEN:LIST:START -->"
-README_END = "<!-- AUTOGEN:LIST:END -->"
-
+# Sprite config
 ICON_SIZE = 24
-SPRITE_COLS = 12  # adjust freely
-SPRITE_FMT = "PNG"  # safest for broad compatibility
+SPRITE_COLS = 12  # change freely
+SPRITE_WEBP_QUALITY = 85
+SPRITE_JPG_QUALITY = 85
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,9 @@ class Site:
     url: str
     category: str
     tags: list[str]
+    # If icon exists, build.py will set icon_x/icon_y (pixel offsets in sprite).
+    icon_x: int | None = None
+    icon_y: int | None = None
 
 
 def _hostname(url: str) -> str:
@@ -43,9 +46,16 @@ def _hostname(url: str) -> str:
         return ""
 
 
+def _strip_www(host: str) -> str:
+    if host.startswith("www."):
+        return host[4:]
+    return host
+
+
 def load_sites() -> list[Site]:
     data = json.loads(SRC_LIST.read_text(encoding="utf-8"))
     raw = data.get("sites", [])
+
     sites: list[Site] = []
     for it in raw:
         name = (it.get("name") or "").strip()
@@ -58,7 +68,7 @@ def load_sites() -> list[Site]:
 
         sites.append(Site(name=name, url=url, category=category, tags=tags[:5]))
 
-    # Stable output order
+    # Stable ordering for deterministic builds
     sites.sort(key=lambda s: (s.category, s.name, s.url))
     return sites
 
@@ -68,58 +78,114 @@ def build_category_options(sites: list[Site]) -> str:
     return "\n      ".join(f'<option value="{escape(c)}">{escape(c)}</option>' for c in cats)
 
 
-def normalize_icon(img: Image.Image) -> Image.Image:
-    # Convert to RGBA and fit inside ICON_SIZE x ICON_SIZE with transparency padding.
-    img = img.convert("RGBA")
-    w, h = img.size
-    if w == 0 or h == 0:
-        return Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0, 0, 0, 0))
+def normalize_icon_to_rgb_white_bg(img: Image.Image) -> Image.Image:
+    """
+    Returns a 24x24 RGB image (no alpha).
+    If input has transparency, it is composited on white.
+    """
+    # Work in RGBA first to properly composite alpha
+    rgba = img.convert("RGBA")
+    w, h = rgba.size
+    if w <= 0 or h <= 0:
+        return Image.new("RGB", (ICON_SIZE, ICON_SIZE), (255, 255, 255))
 
+    # Resize to fit inside ICON_SIZE x ICON_SIZE
     scale = min(ICON_SIZE / w, ICON_SIZE / h)
     nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-    img = img.resize((nw, nh), Image.LANCZOS)
+    rgba = rgba.resize((nw, nh), Image.LANCZOS)
 
-    canvas = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (0, 0, 0, 0))
+    # White background canvas in RGBA for alpha composite
+    canvas_rgba = Image.new("RGBA", (ICON_SIZE, ICON_SIZE), (255, 255, 255, 255))
     x = (ICON_SIZE - nw) // 2
     y = (ICON_SIZE - nh) // 2
-    canvas.alpha_composite(img, (x, y))
-    return canvas
+    canvas_rgba.alpha_composite(rgba, (x, y))
+
+    # Convert to RGB (drop alpha)
+    return canvas_rgba.convert("RGB")
 
 
 def load_icons_by_hostnames(hostnames: list[str]) -> dict[str, Image.Image]:
-    # Icons are optional. We only map hostnames that actually have a file in src/icons.
+    """
+    Icons are optional.
+    File naming convention: <hostname>.png (exact hostname).
+    Also supports 'www.' fallback: tries host, then host without 'www.'.
+    """
     icons: dict[str, Image.Image] = {}
 
     for host in hostnames:
         if not host:
             continue
-        # File naming convention: <hostname>.png (you can extend to .webp/.jpg later)
-        fp = ICONS_DIR / f"{host}.png"
-        if fp.exists():
-            try:
-                img = Image.open(fp)
-                icons[host] = normalize_icon(img)
-            except Exception:
-                # Ignore broken icon files; fallback will show a letter.
-                pass
+
+        candidates = [host]
+        no_www = _strip_www(host)
+        if no_www != host:
+            candidates.append(no_www)
+
+        icon_path = None
+        for cand in candidates:
+            fp = ICONS_DIR / f"{cand}.png"
+            if fp.exists():
+                icon_path = fp
+                host = cand  # normalize key to the actual matched filename hostname
+                break
+
+        if icon_path is None:
+            continue
+
+        try:
+            img = Image.open(icon_path)
+            icons[host] = normalize_icon_to_rgb_white_bg(img)
+        except Exception:
+            # Ignore unreadable/broken icon files; site will fall back to first-letter UI.
+            continue
 
     return icons
 
 
-def build_sprite(icons: dict[str, Image.Image]) -> tuple[str, str, str, dict[str, tuple[int, int]]]:
+def save_sprite_to_data_uri(sprite_rgb: Image.Image) -> tuple[str, str]:
     """
+    Tries WebP first; if not supported by the Pillow build, falls back to JPEG.
+    Returns (data_uri, mime).
+    """
+    buf = BytesIO()
+
+    # Try WebP
+    try:
+        sprite_rgb.save(
+            buf,
+            format="WEBP",
+            quality=SPRITE_WEBP_QUALITY,
+            method=6,  # higher compression effort
+        )
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/webp;base64,{b64}", "image/webp"
+    except Exception:
+        # Fallback to JPEG
+        buf = BytesIO()
+        sprite_rgb.save(
+            buf,
+            format="JPEG",
+            quality=SPRITE_JPG_QUALITY,
+            optimize=True,
+            progressive=True,
+        )
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}", "image/jpeg"
+
+
+def build_sprite_and_positions(icons: dict[str, Image.Image]) -> tuple[str, str, dict[str, tuple[int, int]]]:
+    """
+    Builds a single RGB sprite (no alpha) on white background.
     Returns:
-      sprite_data_uri, bg_size_css, icon_css_rules, positions mapping
+      - sprite data URI
+      - background-size css (e.g. "288px 120px")
+      - positions dict: hostname -> (x, y) in pixels
     """
     if not icons:
-        # Minimal transparent 1x1 PNG as a placeholder; CSS/JS will still show letter fallback.
-        blank = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-        buf = BytesIO()
-        blank.save(buf, format="PNG", optimize=True)
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        data_uri = f"data:image/png;base64,{b64}"
-        bg_size = "1px 1px"
-        return data_uri, bg_size, "", {}
+        # Minimal 1x1 white image for safety
+        blank = Image.new("RGB", (1, 1), (255, 255, 255))
+        data_uri, _mime = save_sprite_to_data_uri(blank)
+        return data_uri, "1px 1px", {}
 
     hosts = sorted(icons.keys())
     n = len(hosts)
@@ -128,104 +194,115 @@ def build_sprite(icons: dict[str, Image.Image]) -> tuple[str, str, str, dict[str
 
     sprite_w = cols * ICON_SIZE
     sprite_h = rows * ICON_SIZE
-    sprite = Image.new("RGBA", (sprite_w, sprite_h), (0, 0, 0, 0))
+    sprite = Image.new("RGB", (sprite_w, sprite_h), (255, 255, 255))
 
     positions: dict[str, tuple[int, int]] = {}
     for idx, host in enumerate(hosts):
         x = (idx % cols) * ICON_SIZE
         y = (idx // cols) * ICON_SIZE
-        sprite.alpha_composite(icons[host], (x, y))
+        sprite.paste(icons[host], (x, y))
         positions[host] = (x, y)
 
-    buf = BytesIO()
-    # PNG optimize helps a lot on sprites of tiny icons.
-    sprite.save(buf, format=SPRITE_FMT, optimize=True)
-    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    data_uri = f"data:image/png;base64,{b64}"
-
+    data_uri, _mime = save_sprite_to_data_uri(sprite)
     bg_size = f"{sprite_w}px {sprite_h}px"
-
-    # Attribute selector rules. A hostname without an icon simply won't have a rule.
-    rules = []
-    for host, (x, y) in positions.items():
-        rules.append(
-            f'.favicon.has-ico[data-ico="{escape(host)}"]' +
-            f'{{background-position:-{x}px -{y}px;}}'
-        )
-
-    icon_css_rules = "\n".join(rules)
-    return data_uri, bg_size, icon_css_rules, positions
+    return data_uri, bg_size, positions
 
 
-def build_readme_block(sites: list[Site]) -> str:
-    # Group by category for readability
-    by_cat: dict[str, list[Site]] = {}
+def attach_icon_positions_to_sites(sites: list[Site], positions: dict[str, tuple[int, int]]) -> list[Site]:
+    """
+    Adds icon_x/icon_y to site objects if an icon exists.
+    It tries hostname as-is and also without 'www.' for matching.
+    """
+    out: list[Site] = []
     for s in sites:
-        by_cat.setdefault(s.category or "سایر", []).append(s)
+        host = _hostname(s.url)
+        host2 = _strip_www(host)
 
-    lines: list[str] = []
-    for cat in sorted(by_cat.keys()):
-        items = sorted(by_cat[cat], key=lambda x: (x.name, x.url))
+        pos = None
+        if host in positions:
+            pos = positions[host]
+        elif host2 in positions:
+            pos = positions[host2]
 
-        lines.append(f"### {cat}")
-        lines.append("")
-        lines.append("| نام | آدرس | تگ‌ها |")
-        lines.append("|---|---|---|")
+        if pos is None:
+            out.append(s)
+        else:
+            out.append(
+                Site(
+                    name=s.name,
+                    url=s.url,
+                    category=s.category,
+                    tags=s.tags,
+                    icon_x=pos[0],
+                    icon_y=pos[1],
+                )
+            )
+    return out
 
-        for it in items:
-            name = it.name.replace("|", "\\|")
-            url = it.url
-            tags = "، ".join(it.tags).replace("|", "\\|")
-            lines.append(f"| {name} | {url} | {tags} |")
+def build_version() -> str:
+    """
+    Returns a human-readable build version without requiring network access.
+    Priority:
+      1) GitHub Actions run number
+      2) Git short commit hash
+      3) Local timestamp
+    """
+    # GitHub Actions
+    run_number = os.environ.get("GITHUB_RUN_NUMBER")
+    if run_number:
+        date = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+        return f"r-{date}-{run_number}"
 
-        lines.append("")
+    # Git commit hash (short)
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        return f"git-{commit}"
+    except Exception:
+        pass
 
-    return "\n".join(lines).strip() + "\n"
-
-
-def update_readme(block: str) -> None:
-    text = README.read_text(encoding="utf-8")
-    pattern = re.compile(re.escape(README_START) + r".*?" + re.escape(README_END), flags=re.DOTALL)
-
-    if not pattern.search(text):
-        raise RuntimeError("README markers not found. Add AUTOGEN markers first.")
-
-    replacement = f"{README_START}\n\n{block}\n{README_END}"
-    new_text = pattern.sub(replacement, text)
-    README.write_text(new_text, encoding="utf-8")
-
+    # Local fallback
+    ts = datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    return f"local-{ts}"
 
 def main() -> None:
     sites = load_sites()
+    version = build_version()
 
-    # Collect hostnames from the list (only for icon lookup and ICON_HOSTS set)
-    hostnames = sorted({ _hostname(s.url) for s in sites if _hostname(s.url) })
+    # Unique hostnames for icon lookup
+    hostnames = sorted({h for h in (_hostname(s.url) for s in sites) if h})
 
     icons = load_icons_by_hostnames(hostnames)
-    sprite_data_uri, bg_size_css, icon_css_rules, positions = build_sprite(icons)
+    sprite_data_uri, bg_size_css, positions = build_sprite_and_positions(icons)
 
-    icon_hosts = sorted(list(positions.keys()))
+    # Add icon positions directly into SITES objects
+    sites_with_icons = attach_icon_positions_to_sites(sites, positions)
 
+    # Read and fill template
     template = TEMPLATE.read_text(encoding="utf-8")
 
-    html = template
-    html = html.replace("__DATA__", json.dumps([s.__dict__ for s in sites], ensure_ascii=False))
-    html = html.replace("__ICON_HOSTS__", json.dumps(icon_hosts, ensure_ascii=False))
-    html = html.replace("__CATEGORIES__", build_category_options(sites))
+    # Build the JS array. Keep keys stable.
+    sites_payload = [asdict(s) for s in sites_with_icons]
 
+    html = template
+    html = html.replace("__DATA__", json.dumps(sites_payload, ensure_ascii=False))
+    html = html.replace("__CATEGORIES__", build_category_options(sites_with_icons))
     html = html.replace("__SPRITE_DATA_URI__", sprite_data_uri)
     html = html.replace("__SPRITE_BG_SIZE__", bg_size_css)
-    html = html.replace("__ICON_CSS_RULES__", icon_css_rules)
+    html = html.replace("__BUILD_VERSION__", version)
+
+
+    # In case older templates still have this placeholder, neutralize it.
+    html = html.replace("__ICON_CSS_RULES__", "")
 
     DIST_DIR.mkdir(parents=True, exist_ok=True)
     OUT_HTML.write_text(html, encoding="utf-8")
 
-    # Update README auto-generated section
-    readme_block = build_readme_block(sites)
-    update_readme(readme_block)
-
     print(f"Built: {OUT_HTML}")
-    print(f"Updated: {README}")
+    print(f"Icons packed: {len(positions)}")
 
 
 if __name__ == "__main__":
